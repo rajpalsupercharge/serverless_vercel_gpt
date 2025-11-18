@@ -7,6 +7,7 @@ const Stripe = require("stripe");
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
+app.set('trust proxy', 1); // trust first proxy (Vercel)
 
 // Rate limiting with Vercel-compatible store
 const limiter = rateLimit({
