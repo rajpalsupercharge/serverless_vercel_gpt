@@ -6,7 +6,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 
 export default async function handler(req, res) {
-  // Allow only POST
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
@@ -15,17 +14,15 @@ export default async function handler(req, res) {
   try {
     const { email, plan_tier = "pro" } = req.body || {};
 
-    // 1) Validate input
     if (!email) {
       return res.status(400).json({ error: "Email is required" });
     }
 
-    // 2) Map plan_tier -> Stripe price ID
+    // Map plan tier → Stripe price
     let priceId;
     switch (plan_tier) {
       case "pro":
-        // e.g. price_1SHwa8DoBVpeHi4xjJnwi4va
-        priceId = process.env.STRIPE_PRICE_PRO;
+        priceId = process.env.STRIPE_PRICE_PRO; // e.g. price_1SHwa8DoBVpeHi4xjJnwi4va
         break;
       default:
         return res.status(400).json({ error: "Invalid plan_tier" });
@@ -34,10 +31,10 @@ export default async function handler(req, res) {
     if (!priceId) {
       return res
         .status(500)
-        .json({ error: "Missing Stripe price ID environment variable" });
+        .json({ error: "Missing STRIPE_PRICE_PRO environment variable" });
     }
 
-    // 3) Find or create customer
+    // Find or create customer
     const existing = await stripe.customers.list({ email, limit: 1 });
     const customer =
       existing.data[0] ||
@@ -45,13 +42,11 @@ export default async function handler(req, res) {
         email,
       }));
 
-    // 4) Build base URL (MUST include scheme in env)
-    const BASE_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+    // 🔥 Hard-coded, fully-qualified URLs (no env, no BASE_URL)
+    const successUrl =
+      "https://serverless-vercel-gpt.vercel.app/success?session_id={CHECKOUT_SESSION_ID}";
+    const cancelUrl = "https://serverless-vercel-gpt.vercel.app/cancel";
 
-    const successUrl = `${BASE_URL}/success?session_id={CHECKOUT_SESSION_ID}`;
-    const cancelUrl = `${BASE_URL}/cancel`;
-
-    // 5) Create checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customer.id,
@@ -71,7 +66,6 @@ export default async function handler(req, res) {
       },
     });
 
-    // 6) Return data to GPT / frontend
     return res.status(200).json({
       id: session.id,
       url: session.url,
@@ -80,8 +74,8 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error("Stripe checkout error:", err);
-    return res
-      .status(500)
-      .json({ error: err.message || "Something went wrong" });
+    return res.status(500).json({
+      error: err.message || "Something went wrong",
+    });
   }
 }
