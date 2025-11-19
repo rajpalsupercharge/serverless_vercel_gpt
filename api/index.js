@@ -5,6 +5,9 @@ const bodyParser = require("body-parser");
 const rateLimit = require("express-rate-limit");
 const Stripe = require("stripe");
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const accessRoutes = require('./routes/access');
+const { router: stripeRoutes, stripeWebhookHandler } = require('./routes/stripe');
+const airtableRoutes = require('./routes/airtable');
 
 const app = express();
 app.set('trust proxy', 1); // trust first proxy (Vercel)
@@ -48,14 +51,12 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization']
 }));
 
-// Body parsing middleware
+// Stripe webhook endpoint must receive the raw body (define before bodyParser)
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookHandler);
+
+// Body parsing middleware (applies to all other routes)
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-
-// Import routes (we'll create these next)
-const accessRoutes = require('./routes/access');
-const stripeRoutes = require('./routes/stripe');
-const airtableRoutes = require('./routes/airtable');
 
 // Health check
 app.get('/api', (req, res) => {
