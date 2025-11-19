@@ -75,13 +75,12 @@ router.post('/users', authenticateApiKey, async (req, res) => {
     
     if (existingRecords.length > 0) {
       // Update existing user
-      const updateFields = {
-        UpdatedAt: new Date().toISOString()
-      };
+      const updateFields = {};
       
       if (plan) updateFields.Plan = plan;
       if (status) updateFields.Status = status;
       Object.assign(updateFields, customFields);
+      // UpdatedAt is auto-managed by Airtable (computed field)
       
       const updated = await base('Users').update([
         {
@@ -93,16 +92,29 @@ router.post('/users', authenticateApiKey, async (req, res) => {
       result = { action: 'updated', user: updated[0].fields };
     } else {
       // Create new user
+      // Build fields object - only include Status if provided and valid
+      const createFields = {
+        Email: email
+      };
+      
+      // Only set Plan if provided or if 'free' is a valid option
+      if (plan) {
+        createFields.Plan = plan;
+      }
+      // Don't default to 'free' - let Airtable handle defaults
+      
+      // Only set Status if explicitly provided (must match Airtable options)
+      if (status) {
+        createFields.Status = status;
+      }
+      // Don't default to 'pending' - Status must match valid Airtable options
+      
+      Object.assign(createFields, customFields);
+      
       const created = await base('Users').create([
         {
-          fields: {
-            Email: email,
-            Plan: plan || 'free',
-            Status: status || 'pending',
-            CreatedAt: new Date().toISOString(),
-            UpdatedAt: new Date().toISOString(),
-            ...customFields
-          }
+          fields: createFields
+          // CreatedAt and UpdatedAt are auto-managed by Airtable (computed fields)
         }
       ]);
       
@@ -163,11 +175,14 @@ router.get('/analytics', authenticateApiKey, async (req, res) => {
     });
 
     // Calculate analytics
+    // Status options: active, trailing, canceled, none, pending
     const analytics = {
       total_users: records.length,
       active_subscriptions: records.filter(r => r.fields.Status === 'active').length,
+      trailing_users: records.filter(r => r.fields.Status === 'trailing').length,
+      canceled_users: records.filter(r => r.fields.Status === 'canceled').length,
       pending_users: records.filter(r => r.fields.Status === 'pending').length,
-      cancelled_users: records.filter(r => r.fields.Status === 'cancelled').length,
+      none_users: records.filter(r => r.fields.Status === 'none' || !r.fields.Status).length,
       plans: {},
       revenue_estimate: 0
     };
@@ -220,8 +235,8 @@ router.post('/users/bulk', authenticateApiKey, async (req, res) => {
               {
                 id: records[0].id,
                 fields: {
-                  ...updates,
-                  UpdatedAt: new Date().toISOString()
+                  ...updates
+                  // UpdatedAt is auto-managed by Airtable (computed field)
                 }
               }
             ]);
