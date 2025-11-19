@@ -16,18 +16,48 @@ router.get('/check-access', authenticateApiKey, async (req, res) => {
     }
 
     // Find user in Airtable
-    const records = await base('Users').select({
+    let records = await base('Users').select({
       filterByFormula: `LOWER({Email}) = LOWER('${email.toLowerCase()}')`,
       maxRecords: 1
     }).firstPage();
 
+    // If user doesn't exist, create them in Airtable
+    let userCreated = false;
     if (records.length === 0) {
-      return res.json({
-        has_access: false,
-        plan: null,
-        status: null,
-        current_period_end: null
-      });
+      try {
+        console.log(`Creating new user in Airtable: ${email}`);
+        // Create user without Status - Status field is optional
+        // Only set Status if you have a valid option in your Airtable Status field
+        // Status can be set later via API or manually in Airtable
+        const userFields = {
+          Email: email
+          // Status is not set - will be null/empty until set via webhook or manually
+        };
+        
+        // Only set Plan if 'free' is a valid option in your Airtable
+        // If not, remove this line or set to a valid option
+        // userFields.Plan = 'free';
+        
+        const newRecords = await base('Users').create([
+          {
+            fields: userFields
+            // CreatedAt and UpdatedAt are auto-managed by Airtable (computed fields)
+          }
+        ]);
+        records = newRecords;
+        userCreated = true;
+        console.log(`✅ User created in Airtable: ${email}`);
+      } catch (airtableError) {
+        console.error('Error creating user in Airtable:', airtableError);
+        // Continue even if Airtable creation fails - return no access
+        return res.json({
+          has_access: false,
+          plan: null,
+          status: null,
+          current_period_end: null,
+          message: 'User not found and could not be created'
+        });
+      }
     }
 
     const user = records[0].fields;
@@ -41,7 +71,8 @@ router.get('/check-access', authenticateApiKey, async (req, res) => {
       has_access: hasAccess,
       plan: user.Plan || null,
       status: user.Status || null,
-      current_period_end: periodEnd ? periodEnd.toISOString() : null
+      current_period_end: periodEnd ? periodEnd.toISOString() : null,
+      user_created: userCreated // Indicates if user was just created
     });
 
   } catch (error) {
