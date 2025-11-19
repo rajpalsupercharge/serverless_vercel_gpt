@@ -13,6 +13,11 @@ function authenticateApiKey(req, res, next) {
   const apiKey = headerApiKey || bearerApiKey;
 
   if (!apiKey) {
+    console.log('❌ API key missing');
+    console.log('   Request path:', req.path);
+    console.log('   Request method:', req.method);
+    console.log('   Headers received:', JSON.stringify(req.headers, null, 2));
+    console.log('   Looking for: x-api-key or Authorization header');
     return res.status(401).json({ error: 'API key is required' });
   }
 
@@ -23,8 +28,14 @@ function authenticateApiKey(req, res, next) {
   }
 
   if (apiKey !== validApiKey) {
+    console.log('❌ Invalid API key');
+    console.log('   Received length:', apiKey.length, 'First 4 chars:', apiKey.substring(0, 4));
+    console.log('   Expected length:', validApiKey.length, 'First 4 chars:', validApiKey.substring(0, 4));
+    console.log('   Request path:', req.path);
     return res.status(401).json({ error: 'Invalid API key' });
   }
+  
+  console.log('✅ API key validated successfully for:', req.path);
 
   next();
 }
