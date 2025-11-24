@@ -7,7 +7,7 @@ const Stripe = require("stripe");
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const accessRoutes = require('./routes/access');
 const { router: stripeRoutes, stripeWebhookHandler } = require('./routes/stripe');
-const airtableRoutes = require('./routes/airtable');
+const usersRoutes = require('./routes/users');
 
 const app = express();
 app.set('trust proxy', 1); // trust first proxy (Vercel)
@@ -25,21 +25,21 @@ const limiter = rateLimit({
 
 // CORS configuration
 app.use(cors({
-  origin: function(origin, callback) {
+  origin: function (origin, callback) {
     const allowedOrigins = [
       'https://chat.openai.com',
       'https://chatgpt.com',
       process.env.FRONTEND_URL
     ].filter(Boolean);
-    
+
     // Allow requests with no origin (like mobile apps or Postman)
     if (!origin) return callback(null, true);
-    
+
     if (process.env.NODE_ENV !== 'production') {
       // Allow all origins in development
       return callback(null, true);
     }
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -58,11 +58,14 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), strip
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// Handle favicon.ico to prevent 404s
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Health check
 app.get('/api', (req, res) => {
-  res.status(200).json({ 
+  res.status(200).json({
     status: 'healthy',
-    message: 'GPT Paywall API is running on Vercel',
+    message: 'GPT Paywall API is running on Vercel (Supabase Edition)',
     timestamp: new Date().toISOString()
   });
 });
@@ -73,7 +76,7 @@ app.use('/api/', limiter);
 // Use routes
 app.use('/api', accessRoutes);
 app.use('/api/stripe', stripeRoutes);
-app.use('/api/airtable', airtableRoutes);
+app.use('/api/users', usersRoutes);
 
 // Handle OPTIONS requests for CORS preflight
 app.options('*', cors());
@@ -81,11 +84,11 @@ app.options('*', cors());
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  
+
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ error: 'CORS policy violation' });
   }
-  
+
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
@@ -99,3 +102,4 @@ app.use((req, res) => {
 
 // IMPORTANT: Export for Vercel
 module.exports = app;
+
