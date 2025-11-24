@@ -1,55 +1,49 @@
 const express = require('express');
 const router = express.Router();
-const Airtable = require('airtable');
+const supabase = require('../lib/supabase');
 const { authenticateApiKey } = require('../middleware/auth');
-
-// Initialize Airtable
-const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
 
 // Check user access
 router.get('/check-access', authenticateApiKey, async (req, res) => {
   try {
     const { email } = req.query;
-    
+
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    // Find user in Airtable
-    let records = await base('Users').select({
-      filterByFormula: `LOWER({Email}) = LOWER('${email.toLowerCase()}')`,
-      maxRecords: 1
-    }).firstPage();
+    // Find user in Supabase
+    const { data: users, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', email)
+      .limit(1);
 
-    // If user doesn't exist, create them in Airtable
+    if (findError) {
+      console.error('Error finding user:', findError);
+      throw findError;
+    }
+
+    let user = users && users.length > 0 ? users[0] : null;
     let userCreated = false;
-    if (records.length === 0) {
+
+    // If user doesn't exist, create them
+    if (!user) {
       try {
-        console.log(`Creating new user in Airtable: ${email}`);
-        // Create user without Status - Status field is optional
-        // Only set Status if you have a valid option in your Airtable Status field
-        // Status can be set later via API or manually in Airtable
-        const userFields = {
-          Email: email
-          // Status is not set - will be null/empty until set via webhook or manually
-        };
-        
-        // Only set Plan if 'free' is a valid option in your Airtable
-        // If not, remove this line or set to a valid option
-        // userFields.Plan = 'free';
-        
-        const newRecords = await base('Users').create([
-          {
-            fields: userFields
-            // CreatedAt and UpdatedAt are auto-managed by Airtable (computed fields)
-          }
-        ]);
-        records = newRecords;
+        console.log(`Creating new user in Supabase: ${email}`);
+        const { data: newUser, error: createError } = await supabase
+          .from('users')
+          .insert([{ email: email }])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+
+        user = newUser;
         userCreated = true;
-        console.log(`✅ User created in Airtable: ${email}`);
-      } catch (airtableError) {
-        console.error('Error creating user in Airtable:', airtableError);
-        // Continue even if Airtable creation fails - return no access
+        console.log(`✅ User created in Supabase: ${email}`);
+      } catch (createError) {
+        console.error('Error creating user in Supabase:', createError);
         return res.json({
           has_access: false,
           plan: null,
@@ -60,19 +54,19 @@ router.get('/check-access', authenticateApiKey, async (req, res) => {
       }
     }
 
-    const user = records[0].fields;
     const now = new Date();
-    const periodEnd = user.CurrentPeriodEnd ? new Date(user.CurrentPeriodEnd) : null;
-    
+    const periodEnd = user.current_period_end ? new Date(user.current_period_end) : null;
+
     // Check if subscription is active
-    const hasAccess = user.Status === 'active' && periodEnd && periodEnd > now;
+    // We check if status is active OR if they are in a trial/grace period that hasn't expired
+    const hasAccess = (user.status === 'active' || user.status === 'trialing') && periodEnd && periodEnd > now;
 
     res.json({
       has_access: hasAccess,
-      plan: user.Plan || null,
-      status: user.Status || null,
+      plan: user.plan || null,
+      status: user.status || null,
       current_period_end: periodEnd ? periodEnd.toISOString() : null,
-      user_created: userCreated // Indicates if user was just created
+      user_created: userCreated
     });
 
   } catch (error) {
@@ -85,25 +79,25 @@ router.get('/check-access', authenticateApiKey, async (req, res) => {
 router.get('/user/:email', authenticateApiKey, async (req, res) => {
   try {
     const { email } = req.params;
-    
-    const records = await base('Users').select({
-      filterByFormula: `LOWER({Email}) = LOWER('${email.toLowerCase()}')`,
-      maxRecords: 1
-    }).firstPage();
 
-    if (records.length === 0) {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', email)
+      .single();
+
+    if (error || !user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const user = records[0];
     res.json({
       id: user.id,
-      email: user.fields.Email,
-      plan: user.fields.Plan,
-      status: user.fields.Status,
-      customer_id: user.fields.StripeCustomerId,
-      created_at: user.fields.CreatedAt,
-      updated_at: user.fields.UpdatedAt
+      email: user.email,
+      plan: user.plan,
+      status: user.status,
+      customer_id: user.stripe_customer_id,
+      created_at: user.created_at,
+      updated_at: user.updated_at
     });
 
   } catch (error) {
@@ -113,3 +107,4 @@ router.get('/user/:email', authenticateApiKey, async (req, res) => {
 });
 
 module.exports = router;
+
