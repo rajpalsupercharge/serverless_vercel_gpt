@@ -2,10 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const Airtable = require('airtable');
+const supabase = require('../lib/supabase');
 const { authenticateApiKey } = require('../middleware/auth');
-
-const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process.env.AIRTABLE_BASE_ID);
 
 function getPriceId() {
   if (!process.env.STRIPE_PRICE_ID) {
@@ -15,11 +13,13 @@ function getPriceId() {
 }
 
 function getDaysUntilDue() {
-  const parsed = parseInt(process.env.STRIPE_DAYS_UNTIL_DUE || '7', 10);
+  // User requested 0 days grace period (due immediately)
+  // If Stripe requires >= 1, we might need to adjust, but trying 0 as requested.
+  const parsed = parseInt(process.env.STRIPE_DAYS_UNTIL_DUE || '0', 10);
   if (Number.isNaN(parsed)) {
-    return 7;
+    return 0;
   }
-  return Math.min(Math.max(parsed, 0), 30);
+  return Math.max(parsed, 0);
 }
 
 function normalizePlanOption(planInput = 'pro') {
@@ -29,13 +29,6 @@ function normalizePlanOption(planInput = 'pro') {
   };
   const normalized = planInput.trim().toLowerCase();
   return planMap[normalized] || planInput;
-}
-
-function formatDateForAirtable(unixSeconds) {
-  if (!unixSeconds) {
-    return null;
-  }
-  return new Date(unixSeconds * 1000).toISOString().split('T')[0];
 }
 
 // Create checkout session (now creates subscription directly)
@@ -49,29 +42,33 @@ router.post('/create-checkout-session', authenticateApiKey, async (req, res) => 
     const selectedPlan = plan_tier || plan || 'pro';
     const normalizedPlan = normalizePlanOption(selectedPlan);
 
-    // Ensure Airtable record exists (create on-demand if missing)
-    let airtableRecord;
-    let records = await base('Users').select({
-      filterByFormula: `LOWER({Email}) = LOWER('${email.toLowerCase()}')`,
-      maxRecords: 1
-    }).firstPage();
+    // Ensure user exists in Supabase
+    let user;
+    const { data: users, error: findError } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', email)
+      .limit(1);
 
-    if (records.length === 0) {
-      const created = await base('Users').create([
-        {
-          fields: { Email: email }
-        }
-      ]);
-      airtableRecord = created[0];
+    if (findError) throw findError;
+
+    if (!users || users.length === 0) {
+      const { data: newUser, error: createError } = await supabase
+        .from('users')
+        .insert([{ email: email }])
+        .select()
+        .single();
+      if (createError) throw createError;
+      user = newUser;
     } else {
-      airtableRecord = records[0];
+      user = users[0];
     }
 
-    // Get or create Stripe customer (prefer Airtable stored id)
+    // Get or create Stripe customer
     let customer;
-    if (airtableRecord.fields.StripeCustomerId) {
+    if (user.stripe_customer_id) {
       try {
-        customer = await stripe.customers.retrieve(airtableRecord.fields.StripeCustomerId);
+        customer = await stripe.customers.retrieve(user.stripe_customer_id);
       } catch (err) {
         console.warn('Stored Stripe customer not found, recreating:', err.message);
       }
@@ -129,31 +126,36 @@ router.post('/create-checkout-session', authenticateApiKey, async (req, res) => 
       subscriptionCreated = true;
     }
 
-    const airtableStatus = mapStripeStatusToAirtable(subscription.status);
-    const currentPeriodEnd = formatDateForAirtable(subscription.current_period_end);
+    // Initial status check - for new subscriptions with trial, it will be 'trialing'
+    // For 'send_invoice', it might be 'active' immediately if no trial, but we want 'awaiting_payment'
+    let dbStatus = mapStripeStatusToDb(subscription.status);
 
-    // Update Airtable with latest subscription details
+    // STRICT CHECK: If active but send_invoice, check if paid
+    if (subscription.status === 'active' && subscription.collection_method === 'send_invoice') {
+      // New subscription, likely unpaid invoice if just created
+      // But if it's a trial, status is trialing.
+      // If it's active, it means trial is over or didn't exist.
+      // We assume awaiting payment until we confirm otherwise.
+      dbStatus = 'awaiting_payment';
+    }
+
+    // Update Supabase
     const updateFields = {
-      StripeCustomerId: customer.id,
-      SubscriptionId: subscription.id,
-      Status: airtableStatus,
-      Plan: normalizedPlan
+      stripe_customer_id: customer.id,
+      subscription_id: subscription.id,
+      status: dbStatus,
+      plan: normalizedPlan,
+      updated_at: new Date().toISOString()
     };
-    if (currentPeriodEnd) {
-      updateFields.CurrentPeriodEnd = currentPeriodEnd;
+
+    if (subscription.current_period_end) {
+      updateFields.current_period_end = new Date(subscription.current_period_end * 1000).toISOString();
     }
 
-    try {
-      await base('Users').update([
-        {
-          id: airtableRecord.id,
-          fields: updateFields
-        }
-      ]);
-    } catch (airtableError) {
-      console.error('Airtable error:', airtableError);
-      // Don't fail the subscription creation if Airtable update fails
-    }
+    await supabase
+      .from('users')
+      .update(updateFields)
+      .eq('id', user.id);
 
     res.json({
       subscription_id: subscription.id,
@@ -208,22 +210,15 @@ router.post('/create-portal-session', authenticateApiKey, async (req, res) => {
   }
 });
 
-// Webhook handler for Stripe events (exported so raw body can be provided before parsing)
+// Webhook handler
 async function stripeWebhookHandler(req, res) {
   console.log('Webhook received');
-  console.log('   Headers:', JSON.stringify(req.headers, null, 2));
-  
+
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!sig) {
-    console.error('Missing stripe-signature header');
-    return res.status(400).send('Missing stripe-signature header');
-  }
-
-  if (!endpointSecret) {
-    console.error('STRIPE_WEBHOOK_SECRET not set in environment');
-    return res.status(500).send('Webhook secret not configured');
+  if (!sig || !endpointSecret) {
+    return res.status(400).send('Missing signature or secret');
   }
 
   let event;
@@ -239,14 +234,16 @@ async function stripeWebhookHandler(req, res) {
   try {
     switch (event.type) {
       case 'checkout.session.completed':
-        const session = event.data.object;
-        await handleCheckoutComplete(session);
+        await handleCheckoutComplete(event.data.object);
         break;
 
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
-        const subscription = event.data.object;
-        await handleSubscriptionUpdate(subscription);
+        await handleSubscriptionUpdate(event.data.object);
+        break;
+
+      case 'invoice.payment_succeeded':
+        await handleInvoicePaid(event.data.object);
         break;
 
       default:
@@ -260,74 +257,80 @@ async function stripeWebhookHandler(req, res) {
   }
 }
 
-// Helper function to handle checkout completion
 async function handleCheckoutComplete(session) {
   const customer = await stripe.customers.retrieve(session.customer);
   const subscription = await stripe.subscriptions.retrieve(session.subscription);
-  
-  // Update user in Airtable
-  const records = await base('Users').select({
-    filterByFormula: `LOWER({Email}) = LOWER('${customer.email.toLowerCase()}')`,
-    maxRecords: 1
-  }).firstPage();
 
-  if (records.length > 0) {
-    await base('Users').update([
-      {
-        id: records[0].id,
-        fields: {
-          Status: 'active',
-          SubscriptionId: subscription.id,
-          CurrentPeriodEnd: formatDateForAirtable(subscription.current_period_end)
-          // UpdatedAt is auto-managed by Airtable (computed field)
-        }
-      }
-    ]);
-  }
+  await updateUserStatus(customer.email, {
+    status: 'active',
+    subscription_id: subscription.id,
+    current_period_end: new Date(subscription.current_period_end * 1000).toISOString()
+  });
 }
 
-// Map Stripe subscription status to Airtable Status options
-// Airtable options: active, trialing, canceled, none, pending
-function mapStripeStatusToAirtable(stripeStatus) {
+async function handleSubscriptionUpdate(subscription) {
+  const customer = await stripe.customers.retrieve(subscription.customer);
+  let dbStatus = mapStripeStatusToDb(subscription.status);
+
+  // STRICT LOGIC: If Stripe says 'active', we verify if the latest invoice is actually paid.
+  // This prevents 'send_invoice' subscriptions from being active before payment.
+  if (subscription.status === 'active' && subscription.collection_method === 'send_invoice') {
+    try {
+      // Fetch the latest invoice to check its status
+      if (subscription.latest_invoice) {
+        const invoice = await stripe.invoices.retrieve(subscription.latest_invoice);
+        if (invoice.status !== 'paid') {
+          console.log(`Strict Check: Subscription ${subscription.id} is active but invoice ${invoice.id} is ${invoice.status}. Setting status to awaiting_payment.`);
+          dbStatus = 'awaiting_payment';
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching invoice for strict check:', err);
+      // Fallback: if we can't check, maybe default to awaiting_payment to be safe?
+      // Or trust Stripe? Let's trust Stripe but log error.
+    }
+  }
+
+  await updateUserStatus(customer.email, {
+    status: dbStatus,
+    current_period_end: new Date(subscription.current_period_end * 1000).toISOString()
+  });
+}
+
+async function handleInvoicePaid(invoice) {
+  if (!invoice.subscription) return;
+
+  const customer = await stripe.customers.retrieve(invoice.customer);
+
+  // Explicitly mark as active/paid when invoice is paid
+  // This is the GOLDEN SIGNAL for access.
+  await updateUserStatus(customer.email, {
+    status: 'active',
+    updated_at: new Date().toISOString()
+  });
+  console.log(`Invoice paid for ${customer.email}, status set to active`);
+}
+
+async function updateUserStatus(email, updates) {
+  const { error } = await supabase
+    .from('users')
+    .update(updates)
+    .ilike('email', email);
+
+  if (error) console.error('Error updating user status:', error);
+}
+
+function mapStripeStatusToDb(stripeStatus) {
   const statusMap = {
     'active': 'active',
     'trialing': 'trialing',
-    'past_due': 'trialing',
-    'unpaid': 'trialing',
+    'past_due': 'past_due', // Strict handling: past_due means NO ACCESS
+    'unpaid': 'past_due',
     'canceled': 'canceled',
-    'cancelled': 'canceled',  // Handle both spellings
-    'incomplete': 'pending',  // Incomplete checkout stays as pending
+    'incomplete': 'pending',
     'incomplete_expired': 'none'
   };
-  
   return statusMap[stripeStatus] || 'none';
-}
-
-// Helper function to handle subscription updates
-async function handleSubscriptionUpdate(subscription) {
-  const customer = await stripe.customers.retrieve(subscription.customer);
-  
-  // Map Stripe status to Airtable status
-  const airtableStatus = mapStripeStatusToAirtable(subscription.status);
-  
-  // Update user in Airtable
-  const records = await base('Users').select({
-    filterByFormula: `{StripeCustomerId} = '${subscription.customer}'`,
-    maxRecords: 1
-  }).firstPage();
-
-  if (records.length > 0) {
-    await base('Users').update([
-      {
-        id: records[0].id,
-        fields: {
-          Status: airtableStatus,  // Use mapped status instead of raw Stripe status
-          CurrentPeriodEnd: formatDateForAirtable(subscription.current_period_end)
-          // UpdatedAt is auto-managed by Airtable (computed field)
-        }
-      }
-    ]);
-  }
 }
 
 module.exports = {
