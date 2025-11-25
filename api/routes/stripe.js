@@ -210,6 +210,54 @@ router.post('/create-portal-session', authenticateApiKey, async (req, res) => {
   }
 });
 
+// Resend latest open invoice
+router.post('/resend-invoice', authenticateApiKey, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Get customer from Stripe
+    const customers = await stripe.customers.list({
+      email: email,
+      limit: 1
+    });
+
+    if (customers.data.length === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    const customer = customers.data[0];
+
+    // Find open invoices
+    const invoices = await stripe.invoices.list({
+      customer: customer.id,
+      status: 'open',
+      limit: 1
+    });
+
+    if (invoices.data.length === 0) {
+      return res.status(404).json({ error: 'No open invoices found' });
+    }
+
+    const invoice = invoices.data[0];
+
+    // Resend the invoice
+    await stripe.invoices.sendInvoice(invoice.id);
+
+    res.json({
+      message: 'Invoice sent successfully',
+      invoice_id: invoice.id
+    });
+
+  } catch (error) {
+    console.error('Resend invoice error:', error);
+    res.status(500).json({ error: 'Failed to resend invoice' });
+  }
+});
+
 // Webhook handler
 async function stripeWebhookHandler(req, res) {
   console.log('Webhook received');
