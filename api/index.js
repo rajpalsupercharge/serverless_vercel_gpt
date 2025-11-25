@@ -60,6 +60,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Handle favicon.ico to prevent 404s
 app.get('/favicon.ico', (req, res) => res.status(204).end());
+app.get('/favicon.png', (req, res) => res.status(204).end());
 
 // Health check
 app.get('/', (req, res) => {
