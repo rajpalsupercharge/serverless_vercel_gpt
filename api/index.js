@@ -62,6 +62,13 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // Health check
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'online',
+    message: 'GPT Paywall API is up and running!',
+    timestamp: new Date().toISOString()
+  });
+});
 app.get('/api', (req, res) => {
   res.status(200).json({
     status: 'healthy',
