@@ -4,7 +4,7 @@ A serverless API to monetize your GPTs using Stripe and Supabase. Deploy easily 
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Frajpalsupercharge%2Fserverless_vercel_gpt&env=STRIPE_SECRET_KEY,STRIPE_PRICE_ID,STRIPE_WEBHOOK_SECRET,SUPABASE_URL,SUPABASE_KEY,GPT_API_KEY)
 
-🚀 Features
+## 🚀 Features
 
 - **Stripe Integration**: Subscriptions, one-time payments, and customer portal.
 - **Supabase Database**: Store user data and subscription status securely.
