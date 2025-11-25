@@ -58,6 +58,9 @@ export default async function handler(req, res) {
           quantity: 1,
         },
       ],
+      subscription_data: {
+        trial_period_days: 1,
+      },
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata: {
