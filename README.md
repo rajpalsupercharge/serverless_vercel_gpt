@@ -1,186 +1,97 @@
-# GPT Paywall - Vercel Deployment Guide
+# GPT Paywall - Vercel & Supabase Edition
 
-## 🚀 Complete Step-by-Step Deployment to Vercel
+A serverless API to monetize your GPTs using Stripe and Supabase. Deploy easily to Vercel.
 
-### Prerequisites
-- Vercel account (free at vercel.com)
-- GitHub account
-- Stripe account with API keys
-- Airtable account with a base created
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Frajpalsupercharge%2Fserverless_vercel_gpt&env=STRIPE_SECRET_KEY,STRIPE_PRICE_ID,STRIPE_WEBHOOK_SECRET,SUPABASE_URL,SUPABASE_KEY,GPT_API_KEY)
 
-### Step 1: Prepare Your Airtable Base
+🚀 Features
 
-Create a table called "Users" with these fields:
-- Email (Email field type)
-- StripeCustomerId (Single line text)
-- SubscriptionId (Single line text)
-- Plan (Single select: free, pro, premium, enterprise)
-- Status (Single select: pending, active, cancelled, past_due)
-- CurrentPeriodEnd (Date)
-- CreatedAt (Date)
-- UpdatedAt (Date)
+- **Stripe Integration**: Subscriptions, one-time payments, and customer portal.
+- **Supabase Database**: Store user data and subscription status securely.
+- **GPT Authentication**: Secure your API with API keys.
+- **OpenAPI Spec**: Ready-to-use specification for GPT Actions.
+- **Resend Invoice**: Endpoint to handle failed payments gracefully.
 
-### Step 2: Set Up Project Structure
+## 🛠️ Prerequisites
 
-```
-your-project/
-├── api/
-│   ├── index.js (main handler)
-│   ├── routes/
-│   │   ├── access.js
-│   │   ├── stripe.js
-│   │   └── airtable.js
-│   └── middleware/
-│       └── auth.js
-├── vercel.json
-├── package.json
-├── .env.example
-├── test-local.js
-└── README.md
-```
+- **Vercel Account**: [Sign up](https://vercel.com)
+- **Supabase Project**: [Create new project](https://supabase.com)
+- **Stripe Account**: [Sign up](https://stripe.com)
 
-### Step 3: Create GitHub Repository
+## 📦 Quick Start
 
-1. Create a new repository on GitHub
-2. Initialize git in your project folder:
-```bash
-git init
-git add .
-git commit -m "Initial commit - GPT Paywall for Vercel"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-git push -u origin main
+### 1. Database Setup (Supabase)
+
+Go to your Supabase SQL Editor and run this query to create the users table:
+
+```sql
+create table users (
+  id uuid default uuid_generate_v4() primary key,
+  email text unique not null,
+  stripe_customer_id text,
+  subscription_id text,
+  plan text,
+  status text,
+  current_period_end timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 ```
 
-### Step 4: Deploy to Vercel
+### 2. Deploy to Vercel
 
-1. **Go to [vercel.com](https://vercel.com) and sign in**
+Click the **Deploy** button above or manually deploy:
 
-2. **Click "Add New..." → "Project"**
+1.  Import this repo to Vercel.
+2.  Add the following Environment Variables:
 
-3. **Import your GitHub repository**
+    ```env
+    STRIPE_SECRET_KEY=sk_live_...
+    STRIPE_PRICE_ID=price_...
+    STRIPE_WEBHOOK_SECRET=whsec_... (Get this after Step 3)
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_KEY=your-anon-key
+    GPT_API_KEY=create-a-secure-password
+    ```
 
-4. **Configure Project:**
-   - Framework Preset: Select "Other"
-   - Root Directory: Leave as "./"
-   - Build Command: Leave empty (no build needed)
-   - Output Directory: Leave empty
-   - Install Command: `npm install`
+### 3. Configure Stripe Webhook
 
-5. **Add Environment Variables (CRUCIAL!):**
-   Click on "Environment Variables" and add:
+1.  Go to **Stripe Dashboard > Developers > Webhooks**.
+2.  Add Endpoint: `https://your-vercel-app.vercel.app/api/stripe/webhook`
+3.  Select events:
+    - `checkout.session.completed`
+    - `customer.subscription.updated`
+    - `customer.subscription.deleted`
+    - `invoice.payment_succeeded`
+4.  Copy the **Signing Secret** and update `STRIPE_WEBHOOK_SECRET` in Vercel.
 
-   ```
-   STRIPE_SECRET_KEY=sk_live_xxxxx
-   STRIPE_PRICE_ID=price_xxxxx
-   STRIPE_WEBHOOK_SECRET=whsec_xxxxx
-   AIRTABLE_API_KEY=keyxxxxx
-   AIRTABLE_BASE_ID=appxxxxx
-   GPT_API_KEY=your-custom-api-key
-   SUCCESS_URL=https://your-app.vercel.app/success
-   CANCEL_URL=https://chat.openai.com
-   RETURN_URL=https://chat.openai.com
-   NODE_ENV=production
-   ```
+## 🧪 Testing & Showcase
 
-6. **Click "Deploy"**
 
-### Step 5: Configure Stripe Webhook
+### OpenAPI Specification
+The `openapi-v2.yaml` file is ready for your GPT Action.
+1.  Copy the content of `openapi-v2.yaml`.
+2.  Paste it into your GPT configuration.
+3.  Update the `servers.url` to your Vercel URL.
 
-1. After deployment, copy your Vercel URL (e.g., `https://your-app.vercel.app`)
+## 🔌 API Endpoints
 
-2. Go to Stripe Dashboard → Webhooks
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/check-access` | Check if a user has active subscription |
+| `POST` | `/api/stripe/create-checkout-session` | Create payment link |
+| `POST` | `/api/stripe/create-portal-session` | Manage subscription |
+| `POST` | `/api/stripe/resend-invoice` | Resend unpaid invoice |
+| `GET` | `/api/user/:email` | Get user details |
 
-3. Add endpoint: `https://your-app.vercel.app/api/stripe/webhook`
+## 🔐 Security
 
-4. Select events:
-   - checkout.session.completed
-   - customer.subscription.updated
-   - customer.subscription.deleted
-
-5. Copy the webhook signing secret and update it in Vercel Environment Variables
-
-### Step 6: Test Your Deployment
-
-Test the health endpoint:
-```bash
-curl https://your-app.vercel.app/api
-```
-
-Test access check:
-```bash
-curl https://your-app.vercel.app/api/check-access?email=test@example.com \
-  -H "X-API-Key: your-gpt-api-key"
-```
-
-### Step 7: Update Your GPT Action
-
-Update your GPT's action configuration:
-1. Change the server URL to your Vercel URL
-2. Update the OpenAPI spec with the new base URL
-3. Add the X-API-Key header for authentication
-
-## 🔧 Troubleshooting Common Issues
-
-### Issue 1: "404 Not Found" errors
-**Solution:** Check your vercel.json rewrites configuration
-
-### Issue 2: "CORS error from ChatGPT"
-**Solution:** Verify CORS origins include 'https://chat.openai.com'
-
-### Issue 3: "Webhook signature verification failed"
-**Solution:** Ensure STRIPE_WEBHOOK_SECRET matches Stripe dashboard
-
-### Issue 4: "Airtable connection failed"
-**Solution:** Verify AIRTABLE_API_KEY and AIRTABLE_BASE_ID are correct
-
-### Issue 5: "Function timeout"
-**Solution:** Vercel free tier has 10-second timeout. Optimize your functions or upgrade.
-
-## 🌟 New Enhanced Endpoints
-
-### User Management
-- `GET /api/airtable/users` - List all users with pagination
-- `POST /api/airtable/users` - Create/update user
-- `DELETE /api/airtable/users/:email` - Delete user
-
-### Analytics
-- `GET /api/airtable/analytics` - Get usage analytics
-
-### Bulk Operations
-- `POST /api/airtable/users/bulk` - Bulk update/delete users
+- **API Key**: All endpoints (except webhooks) require `X-API-Key` header.
+- **RLS**: Enable Row Level Security in Supabase for extra protection.
 
 ## 📝 Local Development
 
-1. Clone the repository
-2. Copy `.env.example` to `.env` and fill in your values
-3. Run locally:
-```bash
-npm install
-node test-local.js
-```
-
-## 🔐 Security Notes
-
-- Always use environment variables for sensitive data
-- Rotate your API keys regularly
-- Monitor your Vercel function logs for suspicious activity
-- Use rate limiting to prevent abuse
-
-## 🚦 Monitoring
-
-Check your deployment status:
-- Vercel Dashboard: Monitor function executions
-- Stripe Dashboard: Track payments
-- Airtable: View user records
-
-## 📧 Support
-
-For issues specific to:
-- Vercel deployment: Check Vercel docs or logs
-- Stripe integration: Contact Stripe support
-- Airtable: Check Airtable API documentation
-
----
-
-**Remember:** After deployment, always test with the GPT interface to ensure everything works end-to-end!
+1.  Clone repo.
+2.  `npm install`
+3.  Create `.env` file.
+4.  `npm start` (Runs on port 3000)
