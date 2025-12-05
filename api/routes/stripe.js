@@ -114,7 +114,7 @@ router.post('/create-checkout-session', authenticateApiKey, async (req, res) => 
             price: getPriceId()
           }
         ],
-        trial_period_days: 1,
+        trial_period_days: 30,
         collection_method: 'send_invoice',
         days_until_due: getDaysUntilDue(),
         metadata: {
