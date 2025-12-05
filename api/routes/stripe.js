@@ -117,11 +117,6 @@ router.post('/create-checkout-session', authenticateApiKey, async (req, res) => 
         trial_period_days: 1,
         collection_method: 'send_invoice',
         days_until_due: getDaysUntilDue(),
-        trial_settings: {
-          end_behavior: {
-            missing_payment_method: 'cancel'
-          }
-        },
         metadata: {
           email,
           plan: normalizedPlan,
